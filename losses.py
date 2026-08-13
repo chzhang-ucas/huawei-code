@@ -20,6 +20,8 @@ class RegressionMeter:
     def __init__(self) -> None:
         self.absolute_error = 0.0
         self.squared_error = 0.0
+        self.correct_at_005 = 0
+        self.correct_at_010 = 0
         self.pixel_count = 0
 
     @torch.no_grad()
@@ -29,12 +31,21 @@ class RegressionMeter:
         error = prediction[valid.bool()] - target[valid.bool()]
         self.absolute_error += error.abs().sum().item()
         self.squared_error += error.square().sum().item()
+        self.correct_at_005 += (error.abs() <= 0.05).sum().item()
+        self.correct_at_010 += (error.abs() <= 0.10).sum().item()
         self.pixel_count += error.numel()
 
     def compute(self) -> dict[str, float]:
         if self.pixel_count == 0:
-            return {"mae": float("nan"), "rmse": float("nan")}
+            return {
+                "mae": float("nan"),
+                "rmse": float("nan"),
+                "acc_005": float("nan"),
+                "acc_010": float("nan"),
+            }
         return {
             "mae": self.absolute_error / self.pixel_count,
             "rmse": (self.squared_error / self.pixel_count) ** 0.5,
+            "acc_005": self.correct_at_005 / self.pixel_count,
+            "acc_010": self.correct_at_010 / self.pixel_count,
         }

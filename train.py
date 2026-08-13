@@ -11,6 +11,7 @@ import numpy as np
 import torch
 from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
+from torch.utils.tensorboard import SummaryWriter
 
 from dataset import JointAugment, SharpnessDataset, discover_samples
 from losses import RegressionMeter, masked_smooth_l1
@@ -21,6 +22,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--data-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, default=Path("runs/small_unet"))
+    parser.add_argument(
+        "--tensorboard-dir",
+        type=Path,
+        default=None,
+        help="TensorBoard log directory (default: OUTPUT_DIR/tensorboard)",
+    )
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=1e-3)
@@ -125,43 +132,62 @@ def main() -> None:
     )
     scaler = GradScaler(device.type, enabled=device.type == "cuda")
     history_path = args.output_dir / "history.csv"
+    tensorboard_dir = args.tensorboard_dir or args.output_dir / "tensorboard"
+    tb_writer = SummaryWriter(log_dir=str(tensorboard_dir))
     best_mae = float("inf")
 
-    with history_path.open("w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(
-            f, fieldnames=["epoch", "lr", "train_loss", "train_mae", "train_rmse",
-                           "val_loss", "val_mae", "val_rmse"]
-        )
-        writer.writeheader()
-        for epoch in range(1, args.epochs + 1):
-            train_metrics = run_epoch(model, train_loader, device, optimizer, scaler)
-            with torch.no_grad():
-                val_metrics = run_epoch(model, val_loader, device, None, scaler)
-            scheduler.step(val_metrics["mae"])
-            row = {
-                "epoch": epoch,
-                "lr": optimizer.param_groups[0]["lr"],
-                **{f"train_{k}": v for k, v in train_metrics.items()},
-                **{f"val_{k}": v for k, v in val_metrics.items()},
-            }
-            writer.writerow(row)
-            f.flush()
-            print(
-                f"Epoch {epoch:03d} | train loss {train_metrics['loss']:.6f} "
-                f"MAE {train_metrics['mae']:.6f} | val loss {val_metrics['loss']:.6f} "
-                f"MAE {val_metrics['mae']:.6f} RMSE {val_metrics['rmse']:.6f}"
-            )
-            checkpoint = {
-                "epoch": epoch,
-                "model": model.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "val_metrics": val_metrics,
-                "args": vars(args),
-            }
-            torch.save(checkpoint, args.output_dir / "last.pt")
-            if val_metrics["mae"] < best_mae:
-                best_mae = val_metrics["mae"]
-                torch.save(checkpoint, args.output_dir / "best.pt")
+    fieldnames = [
+        "epoch", "lr", "train_loss", "train_mae", "train_rmse",
+        "train_acc_005", "train_acc_010", "val_loss", "val_mae", "val_rmse",
+        "val_acc_005", "val_acc_010",
+    ]
+    try:
+        with history_path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            for epoch in range(1, args.epochs + 1):
+                train_metrics = run_epoch(model, train_loader, device, optimizer, scaler)
+                with torch.no_grad():
+                    val_metrics = run_epoch(model, val_loader, device, None, scaler)
+                scheduler.step(val_metrics["mae"])
+                learning_rate = optimizer.param_groups[0]["lr"]
+                row = {
+                    "epoch": epoch,
+                    "lr": learning_rate,
+                    **{f"train_{k}": v for k, v in train_metrics.items()},
+                    **{f"val_{k}": v for k, v in val_metrics.items()},
+                }
+                writer.writerow(row)
+                f.flush()
+
+                for metric_name in ("loss", "mae", "rmse", "acc_005", "acc_010"):
+                    tb_writer.add_scalars(
+                        f"metrics/{metric_name}",
+                        {"train": train_metrics[metric_name], "val": val_metrics[metric_name]},
+                        epoch,
+                    )
+                tb_writer.add_scalar("optimization/learning_rate", learning_rate, epoch)
+                tb_writer.flush()
+
+                print(
+                    f"Epoch {epoch:03d} | train loss {train_metrics['loss']:.6f} "
+                    f"MAE {train_metrics['mae']:.6f} Acc@0.10 {train_metrics['acc_010']:.2%} | "
+                    f"val loss {val_metrics['loss']:.6f} MAE {val_metrics['mae']:.6f} "
+                    f"RMSE {val_metrics['rmse']:.6f} Acc@0.10 {val_metrics['acc_010']:.2%}"
+                )
+                checkpoint = {
+                    "epoch": epoch,
+                    "model": model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "val_metrics": val_metrics,
+                    "args": vars(args),
+                }
+                torch.save(checkpoint, args.output_dir / "last.pt")
+                if val_metrics["mae"] < best_mae:
+                    best_mae = val_metrics["mae"]
+                    torch.save(checkpoint, args.output_dir / "best.pt")
+    finally:
+        tb_writer.close()
 
 
 if __name__ == "__main__":

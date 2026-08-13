@@ -47,6 +47,22 @@ Use `--no-augment` to disable all training augmentation. Checkpoints `best.pt`
 (lowest validation MAE) and `last.pt`, plus `history.csv`, are written under
 `runs/small_unet` by default.
 
+## TensorBoard
+
+Training writes epoch-level train/validation curves for loss, MAE, RMSE,
+`Acc@0.05`, and `Acc@0.10`, as well as the learning rate. The two accuracy
+metrics are the proportions of valid class-1 pixels whose absolute prediction
+error is at most `0.05` and `0.10` respectively.
+
+Start TensorBoard from this directory while training or after training:
+
+```powershell
+tensorboard --logdir runs\small_unet\tensorboard --port 6006
+```
+
+Then open `http://localhost:6006`. A different log directory can be selected
+with `--tensorboard-dir D:\path\to\logs`.
+
 Full `4096 x 3072` training can still require substantial GPU memory because
 activations dominate memory use. If it does not fit, first reduce
 `--base-channels` from `16` to `8`, or enable cropping explicitly.
