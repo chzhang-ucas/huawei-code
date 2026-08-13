@@ -54,6 +54,10 @@ Training writes epoch-level train/validation curves for loss, MAE, RMSE,
 metrics are the proportions of valid class-1 pixels whose absolute prediction
 error is at most `0.05` and `0.10` respectively.
 
+All curves from one training process are written through a single TensorBoard
+event writer and stored in one event file. Starting a new training process in
+the same log directory creates a new event file, as required by TensorBoard.
+
 Start TensorBoard from this directory while training or after training:
 
 ```powershell
@@ -62,6 +66,54 @@ tensorboard --logdir runs\small_unet\tensorboard --port 6006
 
 Then open `http://localhost:6006`. A different log directory can be selected
 with `--tensorboard-dir D:\path\to\logs`.
+
+## Prediction
+
+Predict one image. The PNG mask must have the same size as the image; only
+`mask == 1` is retained in the saved full-size float32 NPY map:
+
+```powershell
+python predict.py --checkpoint runs\small_unet\best.pt `
+  --input D:\data\test\images\0001.jpg `
+  --mask D:\data\test\masks\0001.png `
+  --output-dir predictions
+```
+
+Predict every JPG/JPEG in a directory. Masks are matched by file stem:
+
+```powershell
+python predict.py --checkpoint runs\small_unet\best.pt `
+  --input D:\data\test\images `
+  --mask D:\data\test\masks `
+  --output-dir predictions
+```
+
+This performs full-image inference without resizing or sliding windows. For a
+`0001.jpg` input, the output is `predictions\0001.npy` with the original `H x W`
+shape. Pixels outside class 1 are saved as zero.
+
+## Visualization
+
+Convert one prediction into a color PNG:
+
+```powershell
+python visualize.py --prediction predictions\0001.npy `
+  --mask D:\data\test\masks\0001.png `
+  --output-dir visualizations
+```
+
+Or process a complete prediction directory:
+
+```powershell
+python visualize.py --prediction predictions `
+  --mask D:\data\test\masks `
+  --output-dir visualizations
+```
+
+The visualization uses Matplotlib's standard `jet` colormap with fixed
+`vmin=0` and `vmax=1`, matching `imshow(score, cmap="jet", vmin=0, vmax=1)`.
+Therefore, the same score has the same color in every image. Non-class-1 pixels
+are black. Output files use names such as `0001_color.png`.
 
 Full `4096 x 3072` training can still require substantial GPU memory because
 activations dominate memory use. If it does not fit, first reduce

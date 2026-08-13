@@ -1,4 +1,5 @@
 numpy>=1.24
 Pillow>=9.5
+matplotlib>=3.7
 torch>=2.1
 tensorboard>=2.14

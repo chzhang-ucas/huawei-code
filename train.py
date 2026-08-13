@@ -161,10 +161,13 @@ def main() -> None:
                 f.flush()
 
                 for metric_name in ("loss", "mae", "rmse", "acc_005", "acc_010"):
-                    tb_writer.add_scalars(
-                        f"metrics/{metric_name}",
-                        {"train": train_metrics[metric_name], "val": val_metrics[metric_name]},
-                        epoch,
+                    # add_scalars creates separate event files for train/val.
+                    # Individual tags keep every curve in this writer's one event file.
+                    tb_writer.add_scalar(
+                        f"train/{metric_name}", train_metrics[metric_name], epoch
+                    )
+                    tb_writer.add_scalar(
+                        f"val/{metric_name}", val_metrics[metric_name], epoch
                     )
                 tb_writer.add_scalar("optimization/learning_rate", learning_rate, epoch)
                 tb_writer.flush()
