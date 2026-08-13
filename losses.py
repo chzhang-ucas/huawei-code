@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Dict
+
 import torch
 import torch.nn.functional as F
 
@@ -35,7 +37,7 @@ class RegressionMeter:
         self.correct_at_010 += (error.abs() <= 0.10).sum().item()
         self.pixel_count += error.numel()
 
-    def compute(self) -> dict[str, float]:
+    def compute(self) -> Dict[str, float]:
         if self.pixel_count == 0:
             return {
                 "mae": float("nan"),

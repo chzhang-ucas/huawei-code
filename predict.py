@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import List, Tuple
 
 import numpy as np
 import torch
@@ -27,7 +28,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def collect_pairs(input_path: Path, mask_path: Path) -> list[tuple[Path, Path]]:
+def collect_pairs(input_path: Path, mask_path: Path) -> List[Tuple[Path, Path]]:
     if input_path.is_file():
         if input_path.suffix.lower() not in IMAGE_SUFFIXES:
             raise ValueError(f"Input must be a JPG/JPEG file: {input_path}")
@@ -55,7 +56,7 @@ def collect_pairs(input_path: Path, mask_path: Path) -> list[tuple[Path, Path]]:
 
 
 def load_checkpoint(checkpoint_path: Path, device: torch.device) -> SmallUNet:
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    checkpoint = torch.load(checkpoint_path, map_location=device)
     if not isinstance(checkpoint, dict) or "model" not in checkpoint:
         raise ValueError(f"Invalid training checkpoint: {checkpoint_path}")
     checkpoint_args = checkpoint.get("args", {})
@@ -66,7 +67,7 @@ def load_checkpoint(checkpoint_path: Path, device: torch.device) -> SmallUNet:
     return model
 
 
-def load_inputs(image_path: Path, mask_path: Path) -> tuple[torch.Tensor, np.ndarray]:
+def load_inputs(image_path: Path, mask_path: Path) -> Tuple[torch.Tensor, np.ndarray]:
     with Image.open(image_path) as im:
         image_np = np.asarray(im.convert("RGB"), dtype=np.float32) / 255.0
     with Image.open(mask_path) as im:
@@ -82,7 +83,7 @@ def load_inputs(image_path: Path, mask_path: Path) -> tuple[torch.Tensor, np.nda
     return image, mask_np == 1
 
 
-@torch.inference_mode()
+@torch.no_grad()
 def predict_one(
     model: SmallUNet, image_path: Path, mask_path: Path, device: torch.device
 ) -> np.ndarray:

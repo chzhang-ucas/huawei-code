@@ -3,6 +3,19 @@
 Small U-Net baseline that predicts an `H x W` score map in `[0, 1]`. Only pixels
 whose PNG mask value equals `1` contribute to the loss and validation metrics.
 
+## Environment
+
+The code is compatible with Python 3.8, CUDA 11.0, and PyTorch 1.7.1+cu110.
+Install the matching package versions with:
+
+```powershell
+python -m pip install -r requirements.txt
+```
+
+If PyTorch 1.7.1+cu110 is already installed correctly, it can be left in place;
+the remaining versions in `requirements.txt` are selected for compatibility
+with this older PyTorch/Python environment.
+
 ## Data layout
 
 Files are matched by stem, for example `0001.jpg`, `0001.png`, `0001.npy`.

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from typing import List, Tuple
 
 from matplotlib import cm
 import numpy as np
@@ -20,7 +21,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def collect_pairs(prediction_path: Path, mask_path: Path) -> list[tuple[Path, Path]]:
+def collect_pairs(prediction_path: Path, mask_path: Path) -> List[Tuple[Path, Path]]:
     if prediction_path.is_file():
         if prediction_path.suffix.lower() != ".npy":
             raise ValueError(f"Prediction must be an NPY file: {prediction_path}")

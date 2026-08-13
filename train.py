@@ -7,10 +7,11 @@ import csv
 import random
 import time
 from pathlib import Path
+from typing import Dict, Optional, Tuple
 
 import numpy as np
 import torch
-from torch.amp import GradScaler, autocast
+from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
@@ -80,7 +81,7 @@ class ProgressEstimator:
         self.started_at = time.perf_counter()
         self.last_step_at = self.started_at
 
-    def update(self) -> tuple[float, float, float]:
+    def update(self) -> Tuple[float, float, float]:
         now = time.perf_counter()
         step_seconds = now - self.last_step_at
         self.last_step_at = now
@@ -96,12 +97,12 @@ def run_epoch(
     model: torch.nn.Module,
     loader: DataLoader,
     device: torch.device,
-    optimizer: torch.optim.Optimizer | None,
+    optimizer: Optional[torch.optim.Optimizer],
     scaler: GradScaler,
     epoch: int,
     total_epochs: int,
     progress: ProgressEstimator,
-) -> dict[str, float]:
+) -> Dict[str, float]:
     training = optimizer is not None
     phase = "Train" if training else "Val  "
     model.train(training)
@@ -119,7 +120,7 @@ def run_epoch(
         if training:
             optimizer.zero_grad(set_to_none=True)
         with torch.set_grad_enabled(training):
-            with autocast(device_type=device.type, enabled=device.type == "cuda"):
+            with autocast(enabled=device.type == "cuda"):
                 prediction = model(image)
                 loss = masked_smooth_l1(prediction, label, valid)
             if training:
@@ -178,7 +179,7 @@ def main() -> None:
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer, mode="min", factor=0.5, patience=5
     )
-    scaler = GradScaler(device.type, enabled=device.type == "cuda")
+    scaler = GradScaler(enabled=device.type == "cuda")
     history_path = args.output_dir / "history.csv"
     tensorboard_dir = args.tensorboard_dir or args.output_dir / "tensorboard"
     tb_writer = SummaryWriter(log_dir=str(tensorboard_dir))

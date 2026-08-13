@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import random
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Dict, List, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -16,12 +16,14 @@ VALID_IMAGE_SUFFIXES = {".jpg", ".jpeg"}
 
 
 def discover_samples(
-    image_dir: str | Path, mask_dir: str | Path, label_dir: str | Path
-) -> list[tuple[Path, Path, Path]]:
+    image_dir: Union[str, Path],
+    mask_dir: Union[str, Path],
+    label_dir: Union[str, Path],
+) -> List[Tuple[Path, Path, Path]]:
     """Match image.jpg, mask.png and label.npy by file stem."""
     image_dir, mask_dir, label_dir = map(Path, (image_dir, mask_dir, label_dir))
-    samples: list[tuple[Path, Path, Path]] = []
-    missing: list[str] = []
+    samples: List[Tuple[Path, Path, Path]] = []
+    missing: List[str] = []
     for image_path in sorted(image_dir.iterdir()):
         if image_path.suffix.lower() not in VALID_IMAGE_SUFFIXES:
             continue
@@ -43,12 +45,12 @@ def discover_samples(
 class JointAugment:
     """Apply identical geometry to image, label and valid mask."""
 
-    def __init__(self, crop_size: Optional[tuple[int, int]] = None) -> None:
+    def __init__(self, crop_size: Optional[Tuple[int, int]] = None) -> None:
         self.crop_size = crop_size
 
     def __call__(
         self, image: torch.Tensor, label: torch.Tensor, valid: torch.Tensor
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         if random.random() < 0.5:
             image, label, valid = (torch.flip(x, dims=(-1,)) for x in (image, label, valid))
         if random.random() < 0.5:
@@ -87,7 +89,7 @@ class JointAugment:
 class SharpnessDataset(Dataset):
     def __init__(
         self,
-        samples: list[tuple[Path, Path, Path]],
+        samples: List[Tuple[Path, Path, Path]],
         transform: Optional[Callable] = None,
     ) -> None:
         self.samples = samples
@@ -96,7 +98,7 @@ class SharpnessDataset(Dataset):
     def __len__(self) -> int:
         return len(self.samples)
 
-    def __getitem__(self, index: int) -> dict[str, torch.Tensor | str]:
+    def __getitem__(self, index: int) -> Dict[str, Union[torch.Tensor, str]]:
         image_path, mask_path, label_path = self.samples[index]
         with Image.open(image_path) as im:
             image_np = np.asarray(im.convert("RGB"), dtype=np.float32) / 255.0

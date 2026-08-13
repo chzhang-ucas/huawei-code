@@ -1,5 +1,8 @@
-numpy>=1.24
-Pillow>=9.5
-matplotlib>=3.7
-torch>=2.1
-tensorboard>=2.14
+--find-links https://download.pytorch.org/whl/torch_stable.html
+
+torch==1.7.1+cu110
+numpy==1.21.6
+Pillow==9.5.0
+matplotlib==3.5.3
+tensorboard==2.11.2
+protobuf==3.20.3
