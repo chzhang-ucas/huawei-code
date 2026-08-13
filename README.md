@@ -31,6 +31,11 @@ From this directory:
 python train.py --data-root D:\path\to\data --epochs 100 --batch-size 1
 ```
 
+Every training and validation step prints the current and epoch-average loss,
+cumulative MAE/RMSE, `Acc@0.05`, `Acc@0.10`, step time, elapsed time, and an ETA
+for the complete run. The ETA is updated from measured step times and becomes
+more stable after the first several steps.
+
 The default uses full-resolution images. It applies horizontal/vertical flips and
 rotations by multiples of 90 degrees. These are index-only transforms and do not
 resample or blur the image. Validation has no augmentation.

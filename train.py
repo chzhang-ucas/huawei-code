@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import csv
 import random
+import time
 from pathlib import Path
 
 import numpy as np
@@ -63,20 +64,52 @@ def make_loader(dataset: SharpnessDataset, args: argparse.Namespace, train: bool
     )
 
 
+def format_duration(seconds: float) -> str:
+    seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+class ProgressEstimator:
+    """Estimate total remaining time from all completed train/validation steps."""
+
+    def __init__(self, total_steps: int) -> None:
+        self.total_steps = total_steps
+        self.completed_steps = 0
+        self.started_at = time.perf_counter()
+        self.last_step_at = self.started_at
+
+    def update(self) -> tuple[float, float, float]:
+        now = time.perf_counter()
+        step_seconds = now - self.last_step_at
+        self.last_step_at = now
+        self.completed_steps += 1
+        elapsed = now - self.started_at
+        average_step_seconds = elapsed / self.completed_steps
+        remaining_steps = max(0, self.total_steps - self.completed_steps)
+        eta = average_step_seconds * remaining_steps
+        return step_seconds, elapsed, eta
+
+
 def run_epoch(
     model: torch.nn.Module,
     loader: DataLoader,
     device: torch.device,
     optimizer: torch.optim.Optimizer | None,
     scaler: GradScaler,
+    epoch: int,
+    total_epochs: int,
+    progress: ProgressEstimator,
 ) -> dict[str, float]:
     training = optimizer is not None
+    phase = "Train" if training else "Val  "
     model.train(training)
     meter = RegressionMeter()
     total_loss = 0.0
     steps = 0
 
-    for batch in loader:
+    for step, batch in enumerate(loader, start=1):
         image = batch["image"].to(device, non_blocking=True)
         label = batch["label"].to(device, non_blocking=True)
         valid = batch["valid"].to(device, non_blocking=True)
@@ -97,6 +130,21 @@ def run_epoch(
         total_loss += loss.item()
         steps += 1
         meter.update(prediction.detach(), label, valid)
+        metrics = meter.compute()
+        average_loss = total_loss / steps
+        learning_rate = optimizer.param_groups[0]["lr"] if training else 0.0
+        step_seconds, elapsed, eta = progress.update()
+        lr_text = f" LR {learning_rate:.2e}" if training else ""
+        print(
+            f"Epoch [{epoch:03d}/{total_epochs:03d}] {phase} "
+            f"[{step:04d}/{len(loader):04d}] "
+            f"Loss {loss.item():.6f} (Avg {average_loss:.6f}) "
+            f"MAE {metrics['mae']:.6f} RMSE {metrics['rmse']:.6f} "
+            f"Acc@0.05 {metrics['acc_005']:.2%} Acc@0.10 {metrics['acc_010']:.2%}"
+            f"{lr_text} Step {step_seconds:.2f}s "
+            f"Elapsed {format_duration(elapsed)} ETA {format_duration(eta)}",
+            flush=True,
+        )
 
     metrics = meter.compute()
     metrics["loss"] = total_loss / max(steps, 1)
@@ -135,6 +183,15 @@ def main() -> None:
     tensorboard_dir = args.tensorboard_dir or args.output_dir / "tensorboard"
     tb_writer = SummaryWriter(log_dir=str(tensorboard_dir))
     best_mae = float("inf")
+    total_steps = args.epochs * (len(train_loader) + len(val_loader))
+    progress = ProgressEstimator(total_steps)
+
+    print(
+        f"Training on {device}: {len(train_samples)} train samples, "
+        f"{len(val_samples)} validation samples, {args.epochs} epochs, "
+        f"{total_steps} total steps",
+        flush=True,
+    )
 
     fieldnames = [
         "epoch", "lr", "train_loss", "train_mae", "train_rmse",
@@ -146,9 +203,15 @@ def main() -> None:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()
             for epoch in range(1, args.epochs + 1):
-                train_metrics = run_epoch(model, train_loader, device, optimizer, scaler)
+                train_metrics = run_epoch(
+                    model, train_loader, device, optimizer, scaler,
+                    epoch, args.epochs, progress,
+                )
                 with torch.no_grad():
-                    val_metrics = run_epoch(model, val_loader, device, None, scaler)
+                    val_metrics = run_epoch(
+                        model, val_loader, device, None, scaler,
+                        epoch, args.epochs, progress,
+                    )
                 scheduler.step(val_metrics["mae"])
                 learning_rate = optimizer.param_groups[0]["lr"]
                 row = {
@@ -173,10 +236,14 @@ def main() -> None:
                 tb_writer.flush()
 
                 print(
-                    f"Epoch {epoch:03d} | train loss {train_metrics['loss']:.6f} "
-                    f"MAE {train_metrics['mae']:.6f} Acc@0.10 {train_metrics['acc_010']:.2%} | "
-                    f"val loss {val_metrics['loss']:.6f} MAE {val_metrics['mae']:.6f} "
-                    f"RMSE {val_metrics['rmse']:.6f} Acc@0.10 {val_metrics['acc_010']:.2%}"
+                    f"Epoch [{epoch:03d}/{args.epochs:03d}] Summary | "
+                    f"Train Loss {train_metrics['loss']:.6f} MAE {train_metrics['mae']:.6f} "
+                    f"RMSE {train_metrics['rmse']:.6f} | "
+                    f"Val Loss {val_metrics['loss']:.6f} MAE {val_metrics['mae']:.6f} "
+                    f"RMSE {val_metrics['rmse']:.6f} | "
+                    f"Elapsed {format_duration(time.perf_counter() - progress.started_at)} "
+                    f"ETA {format_duration((time.perf_counter() - progress.started_at) / progress.completed_steps * (progress.total_steps - progress.completed_steps))}",
+                    flush=True,
                 )
                 checkpoint = {
                     "epoch": epoch,
