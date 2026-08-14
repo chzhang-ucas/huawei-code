@@ -35,6 +35,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=1e-3)
     parser.add_argument("--weight-decay", type=float, default=1e-4)
     parser.add_argument("--base-channels", type=int, default=16)
+    parser.add_argument(
+        "--variance-scale",
+        type=float,
+        default=7000.0,
+        help="Fixed variance divisor used by linear normalization",
+    )
     parser.add_argument("--workers", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--crop-size", type=int, nargs=2, metavar=("H", "W"), default=None)
@@ -159,20 +165,26 @@ def main() -> None:
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     train_samples = discover_samples(
-        args.data_root / "train/images",
+        args.data_root / "train/y_images",
+        args.data_root / "train/variances",
         args.data_root / "train/masks",
         args.data_root / "train/labels",
     )
     val_samples = discover_samples(
-        args.data_root / "val/images",
+        args.data_root / "val/y_images",
+        args.data_root / "val/variances",
         args.data_root / "val/masks",
         args.data_root / "val/labels",
     )
     augment = None if args.no_augment else JointAugment(tuple(args.crop_size) if args.crop_size else None)
-    train_loader = make_loader(SharpnessDataset(train_samples, augment), args, train=True)
-    val_loader = make_loader(SharpnessDataset(val_samples), args, train=False)
+    train_loader = make_loader(
+        SharpnessDataset(train_samples, args.variance_scale, augment), args, train=True
+    )
+    val_loader = make_loader(
+        SharpnessDataset(val_samples, args.variance_scale), args, train=False
+    )
 
-    model = SmallUNet(base_channels=args.base_channels).to(device)
+    model = SmallUNet(in_channels=2, base_channels=args.base_channels).to(device)
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay
     )

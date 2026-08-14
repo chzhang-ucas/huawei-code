@@ -1,7 +1,9 @@
 # Pixel Sharpness Regression
 
-Small U-Net baseline that predicts an `H x W` score map in `[0, 1]`. Only pixels
-whose PNG mask value equals `1` contribute to the loss and validation metrics.
+Small U-Net baseline that predicts an `H x W` score map in `[0, 1]`. Its two
+network input channels are the Y luminance image and the variance map. The mask
+is not a network channel: it filters both inputs before inference and limits the
+loss and metrics to pixels whose mask value equals `1`.
 
 ## Environment
 
@@ -18,23 +20,58 @@ with this older PyTorch/Python environment.
 
 ## Data layout
 
-Files are matched by stem, for example `0001.jpg`, `0001.png`, `0001.npy`.
+Files are matched by stem, for example all files for one sample use `0001`.
 
 ```text
 data/
   train/
-    images/*.jpg
+    y_images/*.png
+    variances/*.npy
     masks/*.png
     labels/*.npy
   val/
-    images/*.jpg
+    y_images/*.png
+    variances/*.npy
     masks/*.png
     labels/*.npy
 ```
 
-Each mask and NPY array must have exactly the same height and width as its image.
-Class-1 NPY values must be finite and in `[0, 1]`; values outside class 1 are
-ignored even though they are normally zero.
+Y, variance, mask, and label must have exactly the same `H x W` shape. Class-1
+label values must be finite and in `[0, 1]`. Class-1 variance values must be
+finite and non-negative.
+
+Before entering the network, Y is divided by 255 and variance is linearly
+normalized as `clip(variance / variance_scale, 0, 1)`. Both channels are set to
+zero outside `mask == 1`. The default variance scale is 7000 and can be changed
+with `--variance-scale`; the selected value is saved in the checkpoint and
+automatically reused during prediction. The previous logarithmic formula is
+retained as commented code in both training and prediction data loaders.
+
+## Extract Y channel
+
+Extract the Y (luminance) channel from every JPG/JPEG under `train/images` and
+`val/images` and save it losslessly as a single-channel PNG:
+
+```powershell
+python extract_y_channel.py --data-root D:\path\to\data
+```
+
+The default output layout is:
+
+```text
+data/
+  train/y_images/*.png
+  val/y_images/*.png
+```
+
+Files keep the input stem, for example `train/images/0001.jpg` becomes
+`train/y_images/0001.png`. Existing files with the same name are overwritten.
+To save under another root while preserving the split layout, use:
+
+```powershell
+python extract_y_channel.py --data-root D:\path\to\data `
+  --output-root D:\path\to\y_output
+```
 
 ## Train
 
@@ -42,6 +79,12 @@ From this directory:
 
 ```powershell
 python train.py --data-root D:\path\to\data --epochs 100 --batch-size 1
+```
+
+For example, to use a different fixed variance scale:
+
+```powershell
+python train.py --data-root D:\path\to\data --variance-scale 6500
 ```
 
 Every training and validation step prints the current and epoch-average loss,
@@ -87,27 +130,29 @@ with `--tensorboard-dir D:\path\to\logs`.
 
 ## Prediction
 
-Predict one image. The PNG mask must have the same size as the image; only
-`mask == 1` is retained in the saved full-size float32 NPY map:
+Predict one sample. The Y PNG, variance NPY, and mask PNG must have matching
+dimensions; only `mask == 1` is retained in the saved full-size float32 NPY map:
 
 ```powershell
 python predict.py --checkpoint runs\small_unet\best.pt `
-  --input D:\data\test\images\0001.jpg `
+  --y-input D:\data\test\y_images\0001.png `
+  --variance D:\data\test\variances\0001.npy `
   --mask D:\data\test\masks\0001.png `
   --output-dir predictions
 ```
 
-Predict every JPG/JPEG in a directory. Masks are matched by file stem:
+Predict every Y PNG in a directory. Variances and masks are matched by stem:
 
 ```powershell
 python predict.py --checkpoint runs\small_unet\best.pt `
-  --input D:\data\test\images `
+  --y-input D:\data\test\y_images `
+  --variance D:\data\test\variances `
   --mask D:\data\test\masks `
   --output-dir predictions
 ```
 
 This performs full-image inference without resizing or sliding windows. For a
-`0001.jpg` input, the output is `predictions\0001.npy` with the original `H x W`
+`0001.png` Y input, the output is `predictions\0001.npy` with the original `H x W`
 shape. Pixels outside class 1 are saved as zero.
 
 ## Visualization

@@ -12,38 +12,42 @@ from PIL import Image
 from torch.utils.data import Dataset
 
 
-VALID_IMAGE_SUFFIXES = {".jpg", ".jpeg"}
+VALID_Y_SUFFIXES = {".png"}
 
 
 def discover_samples(
-    image_dir: Union[str, Path],
+    y_dir: Union[str, Path],
+    variance_dir: Union[str, Path],
     mask_dir: Union[str, Path],
     label_dir: Union[str, Path],
-) -> List[Tuple[Path, Path, Path]]:
-    """Match image.jpg, mask.png and label.npy by file stem."""
-    image_dir, mask_dir, label_dir = map(Path, (image_dir, mask_dir, label_dir))
-    samples: List[Tuple[Path, Path, Path]] = []
+) -> List[Tuple[Path, Path, Path, Path]]:
+    """Match Y PNG, variance NPY, mask PNG, and label NPY by file stem."""
+    y_dir, variance_dir, mask_dir, label_dir = map(
+        Path, (y_dir, variance_dir, mask_dir, label_dir)
+    )
+    samples: List[Tuple[Path, Path, Path, Path]] = []
     missing: List[str] = []
-    for image_path in sorted(image_dir.iterdir()):
-        if image_path.suffix.lower() not in VALID_IMAGE_SUFFIXES:
+    for y_path in sorted(y_dir.iterdir()):
+        if y_path.suffix.lower() not in VALID_Y_SUFFIXES:
             continue
-        mask_path = mask_dir / f"{image_path.stem}.png"
-        label_path = label_dir / f"{image_path.stem}.npy"
-        if mask_path.is_file() and label_path.is_file():
-            samples.append((image_path, mask_path, label_path))
+        variance_path = variance_dir / f"{y_path.stem}.npy"
+        mask_path = mask_dir / f"{y_path.stem}.png"
+        label_path = label_dir / f"{y_path.stem}.npy"
+        if variance_path.is_file() and mask_path.is_file() and label_path.is_file():
+            samples.append((y_path, variance_path, mask_path, label_path))
         else:
-            missing.append(image_path.name)
+            missing.append(y_path.name)
     if missing:
         raise FileNotFoundError(
-            "Missing matching PNG mask or NPY label for: " + ", ".join(missing[:10])
+            "Missing matching variance, mask, or label for: " + ", ".join(missing[:10])
         )
     if not samples:
-        raise RuntimeError(f"No matched samples found under {image_dir}")
+        raise RuntimeError(f"No matched samples found under {y_dir}")
     return samples
 
 
 class JointAugment:
-    """Apply identical geometry to image, label and valid mask."""
+    """Apply identical geometry to two-channel input, label, and valid mask."""
 
     def __init__(self, crop_size: Optional[Tuple[int, int]] = None) -> None:
         self.crop_size = crop_size
@@ -89,37 +93,66 @@ class JointAugment:
 class SharpnessDataset(Dataset):
     def __init__(
         self,
-        samples: List[Tuple[Path, Path, Path]],
+        samples: List[Tuple[Path, Path, Path, Path]],
+        variance_scale: float = 7000.0,
         transform: Optional[Callable] = None,
     ) -> None:
+        if variance_scale <= 0:
+            raise ValueError("variance_scale must be positive")
         self.samples = samples
+        self.variance_scale = variance_scale
         self.transform = transform
 
     def __len__(self) -> int:
         return len(self.samples)
 
     def __getitem__(self, index: int) -> Dict[str, Union[torch.Tensor, str]]:
-        image_path, mask_path, label_path = self.samples[index]
-        with Image.open(image_path) as im:
-            image_np = np.asarray(im.convert("RGB"), dtype=np.float32) / 255.0
-            image = torch.from_numpy(image_np.transpose(2, 0, 1)).contiguous()
+        y_path, variance_path, mask_path, label_path = self.samples[index]
+        with Image.open(y_path) as im:
+            y_np = np.asarray(im.convert("L"), dtype=np.float32) / 255.0
         with Image.open(mask_path) as im:
-            mask = torch.from_numpy(np.asarray(im).copy()).long()
+            mask_np = np.asarray(im).copy()
+        variance_np = np.load(variance_path, allow_pickle=False)
         label_np = np.load(label_path, allow_pickle=False)
 
-        if label_np.ndim != 2 or mask.ndim != 2:
-            raise ValueError(f"Mask and label must be HxW: {image_path.name}")
-        h, w = image.shape[-2:]
-        if mask.shape != (h, w) or label_np.shape != (h, w):
+        if mask_np.ndim != 2 or variance_np.ndim != 2 or label_np.ndim != 2:
+            raise ValueError(f"Y, variance, mask, and label must be HxW: {y_path.name}")
+        h, w = y_np.shape
+        if mask_np.shape != (h, w) or variance_np.shape != (h, w) or label_np.shape != (h, w):
             raise ValueError(
-                f"Shape mismatch for {image_path.name}: image={(h, w)}, "
-                f"mask={tuple(mask.shape)}, label={label_np.shape}"
+                f"Shape mismatch for {y_path.name}: Y={(h, w)}, variance={variance_np.shape}, "
+                f"mask={mask_np.shape}, label={label_np.shape}"
             )
 
-        label = torch.from_numpy(label_np.astype(np.float32, copy=False)).unsqueeze(0)
-        valid = mask.eq(1).unsqueeze(0)
-        if not valid.any():
+        valid_np = mask_np == 1
+        if not valid_np.any():
             raise ValueError(f"Mask has no class-1 pixels: {mask_path.name}")
+        valid_variance = variance_np[valid_np]
+        if not np.isfinite(valid_variance).all():
+            raise ValueError(f"Variance contains NaN/Inf in class-1 area: {variance_path.name}")
+        if (valid_variance < 0).any():
+            raise ValueError(f"Variance contains negative values in class-1 area: {variance_path.name}")
+
+        # Filter both network inputs with the mask before concatenation.
+        y_filtered = y_np.copy()
+        y_filtered[~valid_np] = 0.0
+        variance_normalized = np.zeros((h, w), dtype=np.float32)
+        variance_normalized[valid_np] = np.clip(
+            valid_variance.astype(np.float32) / self.variance_scale,
+            0.0,
+            1.0,
+        )
+        # Alternative logarithmic normalization (keep training and prediction consistent):
+        # variance_normalized[valid_np] = np.clip(
+        #     np.log1p(valid_variance.astype(np.float32))
+        #     / np.log1p(self.variance_scale),
+        #     0.0,
+        #     1.0,
+        # )
+        image_np = np.stack((y_filtered, variance_normalized), axis=0)
+        image = torch.from_numpy(image_np).contiguous()
+        label = torch.from_numpy(label_np.astype(np.float32, copy=False)).unsqueeze(0)
+        valid = torch.from_numpy(valid_np).unsqueeze(0)
         if not torch.isfinite(label[valid]).all():
             raise ValueError(f"Label contains NaN/Inf in class-1 area: {label_path.name}")
         if ((label[valid] < 0) | (label[valid] > 1)).any():
@@ -127,4 +160,4 @@ class SharpnessDataset(Dataset):
 
         if self.transform is not None:
             image, label, valid = self.transform(image, label, valid)
-        return {"image": image, "label": label, "valid": valid, "name": image_path.stem}
+        return {"image": image, "label": label, "valid": valid, "name": y_path.stem}

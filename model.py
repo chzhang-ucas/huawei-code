@@ -37,7 +37,7 @@ class UpBlock(nn.Module):
 class SmallUNet(nn.Module):
     """Three-level U-Net. Input and output have the same spatial size."""
 
-    def __init__(self, in_channels: int = 3, base_channels: int = 16) -> None:
+    def __init__(self, in_channels: int = 2, base_channels: int = 16) -> None:
         super().__init__()
         c = base_channels
         self.enc1 = DoubleConv(in_channels, c)
@@ -63,5 +63,5 @@ class SmallUNet(nn.Module):
 
 if __name__ == "__main__":
     model = SmallUNet()
-    sample = torch.randn(1, 3, 257, 341)
+    sample = torch.randn(1, 2, 257, 341)
     print(model(sample).shape)
